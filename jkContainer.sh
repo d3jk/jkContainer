@@ -12,6 +12,7 @@ fi
 cmds=(\
     "mount -t proc proc /proc" \
     "mount -t sysfs sysfs /sys" \
+    "hostname jkcontainer"
 )
 
 for cmd in "${cmds[@]}"; do
