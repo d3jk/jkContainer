@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+
+rootfs="minirootfs"
+sourcefile=".sourcefile"
+
+trap "echo 'Thanks, come again!'" EXIT
+
+# check if source file already exists
+if [[ -f "${rootfs}/${sourcefile}" ]]; then
+    echo "" > ${rootfs}/${sourcefile}
+fi
+
+# commands to execute inside containerized process
+cmds=(\
+    "mount -t proc proc /proc" \
+    "mount -t sysfs sysfs /sys" \
+    "mount -t tmpfs cgroup /sys/fs/cgroup" \
+    "mkdir /sys/fs/cgroup/memory" \
+    "mkdir /sys/fs/cgroup/blkio" \
+    "mkdir /sys/fs/cgroup/pids" \
+    "mkdir /sys/fs/cgroup/rdma" \
+    "mkdir /sys/fs/cgroup/freezer" \
+    "mkdir /sys/fs/cgroup/devices" \
+    "mkdir /sys/fs/cgroup/cpuset" \
+    "mkdir /sys/fs/cgroup/cpu,cpuacct" \
+    "mkdir /sys/fs/cgroup/hugetlb" \
+    "mkdir /sys/fs/cgroup/misc" \
+    "mkdir /sys/fs/cgroup/net_cls,net_prio" \
+    "mkdir /sys/fs/cgroup/perf_event" \
+    "mkdir /sys/fs/cgroup/systemd" \
+    "cd /sys/fs/cgroup" \
+    "ln -s cpu,cpuacct cpu && ln -s cpu,cpuacct cpuacct" \
+    "ln -s net_cls,net_prio net_cls && ln -s net_cls,net_prio net_prio" \
+    "cd /" \
+    "mount -t cgroup -o memory,nosuid,nodev,noexec cgroup /sys/fs/cgroup/memory/" \
+    "mount -t cgroup -o blkio,nosuid,nodev,noexec cgroup /sys/fs/cgroup/blkio/" \
+    "mount -t cgroup -o pids,nosuid,nodev,noexec cgroup /sys/fs/cgroup/pids/" \
+    "mount -t cgroup -o rdma,nosuid,nodev,noexec cgroup /sys/fs/cgroup/rdma/" \
+    "mount -t cgroup -o freezer,nosuid,nodev,noexec cgroup /sys/fs/cgroup/freezer/" \
+    "mount -t cgroup -o devices,nosuid,nodev,noexec cgroup /sys/fs/cgroup/devices/" \
+    "mount -t cgroup -o cpuset,nosuid,nodev,noexec cgroup /sys/fs/cgroup/cpuset/" \
+    "mount -t cgroup -o cpu,cpuacct,nosuid,nodev,noexec cgroup /sys/fs/cgroup/cpu,cpuacct/" \
+    "mount -t cgroup -o hugetlb,nosuid,nodev,noexec cgroup /sys/fs/cgroup/hugetlb/" \
+    "mount -t cgroup -o misc,nosuid,nodev,noexec cgroup /sys/fs/cgroup/misc/" \
+    "mount -t cgroup -o net_cls,net_prio,nosuid,nodev,noexec cgroup /sys/fs/cgroup/net_cls,net_prio/" \
+    "mount -t cgroup -o perf_event,nosuid,nodev,noexec cgroup /sys/fs/cgroup/perf_event/" \
+    "mount -t cgroup -o name=systemd,nosuid,nodev,noexec,xattr cgroup /sys/fs/cgroup/systemd/" \
+    "echo 1 > /sys/fs/cgroup/cpuset/cgroup.clone_children" \
+    "if [[ ! -d /sys/fs/cgroup/memory/jkrun ]]; then mkdir /sys/fs/cgroup/memory/jkrun; fi" \
+    "if [[ ! -d /sys/fs/cgroup/blkio/jkrun ]]; then mkdir /sys/fs/cgroup/blkio/jkrun; fi" \
+    "if [[ ! -d /sys/fs/cgroup/pids/jkrun ]]; then mkdir /sys/fs/cgroup/pids/jkrun; fi" \
+    "if [[ ! -d /sys/fs/cgroup/rdma/jkrun ]]; then mkdir /sys/fs/cgroup/rdma/jkrun; fi" \
+    "if [[ ! -d /sys/fs/cgroup/freezer/jkrun ]]; then mkdir /sys/fs/cgroup/freezer/jkrun; fi" \
+    "if [[ ! -d /sys/fs/cgroup/devices/jkrun ]]; then mkdir /sys/fs/cgroup/devices/jkrun; fi" \
+    "if [[ ! -d /sys/fs/cgroup/cpuset/jkrun ]]; then mkdir /sys/fs/cgroup/cpuset/jkrun; fi" \
+    "if [[ ! -d /sys/fs/cgroup/cpu,cpuacct/jkrun ]]; then mkdir /sys/fs/cgroup/cpu,cpuacct/jkrun; fi" \
+    "if [[ ! -d /sys/fs/cgroup/hugetlb/jkrun ]]; then mkdir /sys/fs/cgroup/hugetlb/jkrun; fi" \
+    "if [[ ! -d /sys/fs/cgroup/misc/jkrun ]]; then mkdir /sys/fs/cgroup/misc/jkrun; fi" \
+    "if [[ ! -d /sys/fs/cgroup/net_cls,net_prio/jkrun ]]; then mkdir /sys/fs/cgroup/net_cls,net_prio/jkrun; fi" \
+    "if [[ ! -d /sys/fs/cgroup/perf_event/jkrun ]]; then mkdir /sys/fs/cgroup/perf_event/jkrun; fi" \
+    "if [[ ! -d /sys/fs/cgroup/systemd/jkrun ]]; then mkdir /sys/fs/cgroup/systemd/jkrun; fi" \
+    "cd /sys/fs/cgroup" \
+    "echo 1 | tee memory/jkrun/cgroup.procs blkio/jkrun/cgroup.procs cpu,cpuacct/jkrun/cgroup.procs devices/jkrun/cgroup.procs freezer/jkrun/cgroup.procs hugetlb/jkrun/cgroup.procs misc/jkrun/cgroup.procs net_cls,net_prio/jkrun/cgroup.procs perf_event/jkrun/cgroup.procs pids/jkrun/cgroup.procs rdma/jkrun/cgroup.procs > systemd/jkrun/cgroup.procs" \
+    "cd /" \
+    "hostname jkrun"
+)
+
+for cmd in "${cmds[@]}"; do
+    echo "$cmd" >> ${rootfs}/${sourcefile}
+done
+
+unshare \
+    --uts \
+    --pid --fork \
+    --ipc \
+    --mount \
+    --net \
+    --cgroup \
+    chroot ${rootfs} /bin/sh -c '. '"${sourcefile}"'; exec /bin/sh'
+
