@@ -2,12 +2,43 @@
 
 rootfs="minirootfs"
 sourcefile=".sourcefile"
+mountpoint="/var/lib/jkrun"
+cuid=$((1000 + $RANDOM % 9000))
+conoverlayfs="${mountpoint}/${cuid}"
 
-trap "echo 'Thanks, come again!'" EXIT
+if [ $# -eq 0 ]; then 
+    echo "|jkrun-> Whoops I need to know where the rootfs is, try something like..."
+    echo "|jkrun-> sudo jkrun ./alpine-minirootfs-3.15.0-x86_64.tar.gz"
+    exit 0
+else
+    pathtoimgtar="$1"
+fi
+
+echo "|jkrun-> ${cuid}"
+
+if [[ ! -d "${mountpoint}" ]]; then mkdir "${mountpoint}"; fi
+if [[ ! -d "${conoverlayfs}" ]]; then 
+    mkdir "${conoverlayfs}"
+    mkdir "${conoverlayfs}/base" \
+        "${conoverlayfs}/diff" \
+        "${conoverlayfs}/overlay" \
+        "${conoverlayfs}/work" 
+else 
+    echo "|jkrun-> Whoops that cuid already exists, try again."
+    exit 0
+fi
+
+basedir="${conoverlayfs}/base"
+overlaydir="${conoverlayfs}/overlay"
+
+tar -xf "${pathtoimgtar}" --directory "${basedir}"
+mount -t overlay -o lowerdir="${basedir}",upperdir="${conoverlayfs}/diff",workdir="${conoverlayfs}/work" jkoverlay "${overlaydir}"
+
+trap "echo '|jkrun-> Thanks, come again!'" EXIT
 
 # check if source file already exists
-if [[ -f "${rootfs}/${sourcefile}" ]]; then
-    echo "" > ${rootfs}/${sourcefile}
+if [[ -f "${overlaydir}/${sourcefile}" ]]; then
+    echo "" > "${overlaydir}/${sourcefile}"
 fi
 
 # commands to execute inside containerized process
@@ -66,7 +97,7 @@ cmds=(\
 )
 
 for cmd in "${cmds[@]}"; do
-    echo "$cmd" >> ${rootfs}/${sourcefile}
+    echo "$cmd" >> "${overlaydir}/${sourcefile}"
 done
 
 unshare \
@@ -76,5 +107,4 @@ unshare \
     --mount \
     --net \
     --cgroup \
-    chroot ${rootfs} /bin/sh -c '. '"${sourcefile}"'; exec /bin/sh'
-
+    chroot "${overlaydir}" /bin/sh -c '. '"${sourcefile}"'; exec /bin/sh'
