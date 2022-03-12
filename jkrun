@@ -1,20 +1,98 @@
 #!/usr/bin/env bash
 
+info='\e[1;36m'
+warn='\e[1;33m'
+error='\e[31m'
+
 rootfs="minirootfs"
 sourcefile=".sourcefile"
+netsourcefile=".netsourcefile"
 mountpoint="/var/lib/jkrun"
 cuid=$((1000 + $RANDOM % 9000))
 conoverlayfs="${mountpoint}/${cuid}"
 
+function jkpremsg() { printf "\e[0;36m|jkrun-> ${info}"; }
+
+function jkmsg() {
+    jkpremsg; for i in {1..3}; do printf ' '; done
+}
+
+function networksetupcheck() {
+    if [[ -v ${hostvenum} || -v ${convenum} ]]; then 
+        jkpremsg; printf "${error}Error setting up network virtual ethernet\n" 
+        jkpremsg; printf "${error}Exiting...\n"
+        exit 1
+    fi
+}
+
+function setnetworkvars() {
+    if [[ $(ip a | grep -E "^[0-9]{1,3}:\sve") ]]; then
+        for i in $(seq 2 2 100); do
+            if [[ ! $(ip a | grep -E "^[0-9]{1,3}:\sve${i}") ]]; then 
+                hostvenum=${i}
+                break
+            fi
+        done
+    else
+        hostvenum=2
+    fi
+    newhostve="ve${hostvenum}"
+    convenum=$((hostvenum-1))
+    newconve="ve${convenum}"
+    hostveip="192.168.${convenum}.200"
+    conveip="192.168.${convenum}.100"
+
+    networksetupcheck
+
+    jkpremsg; echo "Host IP: ${hostveip}"
+    jkpremsg; echo "Container IP: ${conveip}"
+}
+
+function setupnetwork() {
+    # run in background
+    networksetupcheck
+    sleep 1 ####################### may have issue caused by multiple unshare pids running at same time
+    ip link add "${newconve}" netns $(pgrep -P `pgrep unshare`) type veth peer name "${newhostve}" netns 1
+    ip link set "${newhostve}" up
+    ip addr add ${hostveip}/24 dev "${newhostve}"
+}
+
+######################
+### HOST
+# ip link add ve1 netns 28966 type veth peer name ve2 netns 1
+# ip link set ve2 up
+# ip addr add 192.168.1.200/24 dev ve2
+### CONT
+# ip link set ve1 up
+# ip addr add 192.168.1.100/24 dev ve1
+# ping 192.168.1.200
+######################
+
+while getopts 'l' OPTION; do
+    case "$OPTION" in
+    l)
+        jkmsg; echo "Containers"
+        containers=$(ls -l ${mountpoint} | grep -Po "[0-9]{4,5}$")
+        for container in ${containers}; do jkmsg; echo "${container}"; done
+        exit 0
+        ;;
+    ?)
+        jkpremsg; printf "${warn}usage: jkrun [-l]"
+        exit 0
+        ;;
+    esac
+done
+
 if [ $# -eq 0 ]; then 
-    echo "|jkrun-> Whoops I need to know where the rootfs is, try something like..."
-    echo "|jkrun-> sudo jkrun ./alpine-minirootfs-3.15.0-x86_64.tar.gz"
+    jkpremsg; printf "${warn}Whoops I need to know where the rootfs is, try something like...\n";
+    jkpremsg; printf "${warn}sudo jkrun ./alpine-minirootfs-3.15.0-x86_64.tar.gz\n";
     exit 0
 else
     pathtoimgtar="$1"
 fi
 
-echo "|jkrun-> ${cuid}"
+jkpremsg; echo "${cuid}"
+setnetworkvars
 
 if [[ ! -d "${mountpoint}" ]]; then mkdir "${mountpoint}"; fi
 if [[ ! -d "${conoverlayfs}" ]]; then 
@@ -24,7 +102,7 @@ if [[ ! -d "${conoverlayfs}" ]]; then
         "${conoverlayfs}/overlay" \
         "${conoverlayfs}/work" 
 else 
-    echo "|jkrun-> Whoops that cuid already exists, try again."
+    jkpremsg; printf "${warn}Whoops that cuid already exists, try again.\n"
     exit 0
 fi
 
@@ -34,11 +112,15 @@ overlaydir="${conoverlayfs}/overlay"
 tar -xf "${pathtoimgtar}" --directory "${basedir}"
 mount -t overlay -o lowerdir="${basedir}",upperdir="${conoverlayfs}/diff",workdir="${conoverlayfs}/work" jkoverlay "${overlaydir}"
 
-trap "echo '|jkrun-> Thanks, come again!'" EXIT
+trap "jkpremsg; echo 'Thanks, come again!'" EXIT
 
 # check if source file already exists
 if [[ -f "${overlaydir}/${sourcefile}" ]]; then
     echo "" > "${overlaydir}/${sourcefile}"
+fi
+
+if [[ -f "${overlaydir}/${netsourcefile}" ]]; then
+    echo "" > "${overlaydir}/${netsourcefile}"
 fi
 
 # commands to execute inside containerized process
@@ -93,12 +175,24 @@ cmds=(\
     "cd /sys/fs/cgroup" \
     "echo 1 | tee memory/jkrun/cgroup.procs blkio/jkrun/cgroup.procs cpu,cpuacct/jkrun/cgroup.procs devices/jkrun/cgroup.procs freezer/jkrun/cgroup.procs hugetlb/jkrun/cgroup.procs misc/jkrun/cgroup.procs net_cls,net_prio/jkrun/cgroup.procs perf_event/jkrun/cgroup.procs pids/jkrun/cgroup.procs rdma/jkrun/cgroup.procs > systemd/jkrun/cgroup.procs" \
     "cd /" \
-    "hostname jkrun"
+    "hostname jkrun" \
+)
+
+netcmds=(\
+    "sleep 2"
+    "ip link set ${newconve} up" \
+    "ip addr add ${conveip}/24 dev ${newconve} &>/dev/null" \
 )
 
 for cmd in "${cmds[@]}"; do
     echo "$cmd" >> "${overlaydir}/${sourcefile}"
 done
+
+for netcmd in "${netcmds[@]}"; do
+    echo "$netcmd" >> "${overlaydir}/${netsourcefile}"
+done
+
+setupnetwork &
 
 unshare \
     --uts \
@@ -107,4 +201,4 @@ unshare \
     --mount \
     --net \
     --cgroup \
-    chroot "${overlaydir}" /bin/sh -c '. '"${sourcefile}"'; exec /bin/sh'
+    chroot "${overlaydir}" /bin/sh -c '. '"${sourcefile}"'; . '"${netsourcefile}"';printf "\e[0m"; exec /bin/sh'
