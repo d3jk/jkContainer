@@ -50,9 +50,11 @@ function setnetworkvars() {
 
 function setupnetwork() {
     # run in background
+    perentpid=$(ps ajf | grep -E "unshare.*/${cuid}/" | grep -v "grep" | grep -Po "^\s+[0-9]{1,6}\s+\K[0-9]{1,6}")
+    conpid=$(pgrep -P "${perentpid}")
     networksetupcheck
-    sleep 1 ####################### may have issue caused by multiple unshare pids running at same time
-    ip link add "${newconve}" netns $(pgrep -P `pgrep unshare`) type veth peer name "${newhostve}" netns 1
+    sleep 1 
+    ip link add "${newconve}" netns ${conpid} type veth peer name "${newhostve}" netns 1
     ip link set "${newhostve}" up
     ip addr add ${hostveip}/24 dev "${newhostve}"
 }
