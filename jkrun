@@ -14,7 +14,7 @@ conoverlayfs="${mountpoint}/${cuid}"
 function jkpremsg() { printf "\e[0;36m|jkrun-> ${info}"; }
 
 function jkmsg() {
-    jkpremsg; for i in {1..3}; do printf ' '; done
+    jkpremsg; for i in {1..12}; do printf ' '; done
 }
 
 function networksetupcheck() {
@@ -73,7 +73,7 @@ function setupnetwork() {
 while getopts 'l' OPTION; do
     case "$OPTION" in
     l)
-        jkmsg; echo "Containers"
+        jkpremsg; echo "Containers:"
         containers=$(ls -l ${mountpoint} | grep -Po "[0-9]{4,5}$")
         for container in ${containers}; do jkmsg; echo "${container}"; done
         exit 0
@@ -99,6 +99,7 @@ setnetworkvars
 if [[ ! -d "${mountpoint}" ]]; then mkdir "${mountpoint}"; fi
 if [[ ! -d "${conoverlayfs}" ]]; then 
     mkdir "${conoverlayfs}"
+    chmod 700 "${conoverlayfs}"
     mkdir "${conoverlayfs}/base" \
         "${conoverlayfs}/diff" \
         "${conoverlayfs}/overlay" \
