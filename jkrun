@@ -9,7 +9,7 @@ sourcefile=".sourcefile"
 netsourcefile=".netsourcefile"
 mountpoint="/var/lib/jkrun"
 cuid=$((1000 + $RANDOM % 9000))
-conoverlayfs="${mountpoint}/${cuid}"
+isnewcontainer="true"
 
 function jkpremsg() { printf "\e[0;36m|jkrun-> ${info}"; }
 
@@ -17,11 +17,69 @@ function jkmsg() {
     jkpremsg; for i in {1..12}; do printf ' '; done
 }
 
+while getopts 'ls:r:' OPTION; do
+    case "$OPTION" in
+    l)
+        jkpremsg; echo "Containers:"
+        containers=$(ls -l ${mountpoint} | grep -Po "[0-9]{4,5}$")
+        for container in ${containers}; do jkmsg; echo "${container}"; done
+        exit 0
+        ;;
+    s)
+        requestedcuid=$(ls ${mountpoint} | grep "^${OPTARG}$")
+        if [[ "${requestedcuid}" != "" ]]; then
+            cuid=${OPTARG}
+            isnewcontainer="false"
+            jkpremsg; printf "${info}starting container \"${cuid}\"\n"
+        else
+            jkpremsg; printf "${warn}not found: unable to find container \"${OPTARG}\"\n"
+            exit 1
+        fi
+        ;;
+    r) 
+        if [[ "${OPTARG}" != "" ]]; then
+            pathtoimgtar="${OPTARG}"
+        else
+            jkpremsg; printf "${warn}Whoops I need to know where the rootfs is, try something like...\n"
+            jkpremsg; printf "${warn}sudo jkrun ./alpine-minirootfs-3.15.0-x86_64.tar.gz\n"
+            exit 1
+        fi
+        ;;
+    ?)
+        jkpremsg; printf "${warn}usage: jkrun [-l][-r][-s] i.e. sudo jkrun -r path/to/tar\n"
+        exit 0
+        ;;
+    esac
+done
+
+conoverlayfs="${mountpoint}/${cuid}"
+basedir="${conoverlayfs}/base"
+overlaydir="${conoverlayfs}/overlay"
+diffdir="${conoverlayfs}/diff"
+workdir="${conoverlayfs}/work" 
+
+function setupoverlayfs() {
+    if [[ ! -d "${mountpoint}" ]]; then mkdir "${mountpoint}"; fi
+    if [[ ! -d "${conoverlayfs}" ]]; then 
+        mkdir "${conoverlayfs}"
+        chmod 700 "${conoverlayfs}"
+        mkdir "${basedir}" \
+            "${diffdir}" \
+            "${overlaydir}" \
+            "${workdir}" 
+    else 
+        jkpremsg; printf "${warn}Whoops that cuid already exists, try again.\n"
+        exit 0
+    fi
+
+    tar -xf "${pathtoimgtar}" --directory "${basedir}"
+    mount -t overlay -o lowerdir="${basedir}",upperdir="${diffdir}",workdir="${workdir}" jkoverlay "${overlaydir}"
+}
+
 function networksetupcheck() {
+    dosetupnetwork="true"
     if [[ -v ${hostvenum} || -v ${convenum} ]]; then 
-        jkpremsg; printf "${error}Error setting up network virtual ethernet\n" 
-        jkpremsg; printf "${error}Exiting...\n"
-        exit 1
+        jkpremsg; printf "${info}Unable to setup network virtual ethernet\n" 
     fi
 }
 
@@ -70,65 +128,27 @@ function setupnetwork() {
 # ping 192.168.1.200
 ######################
 
-while getopts 'l' OPTION; do
-    case "$OPTION" in
-    l)
-        jkpremsg; echo "Containers:"
-        containers=$(ls -l ${mountpoint} | grep -Po "[0-9]{4,5}$")
-        for container in ${containers}; do jkmsg; echo "${container}"; done
-        exit 0
-        ;;
-    ?)
-        jkpremsg; printf "${warn}usage: jkrun [-l]"
-        exit 0
-        ;;
-    esac
-done
-
-if [ $# -eq 0 ]; then 
-    jkpremsg; printf "${warn}Whoops I need to know where the rootfs is, try something like...\n";
-    jkpremsg; printf "${warn}sudo jkrun ./alpine-minirootfs-3.15.0-x86_64.tar.gz\n";
-    exit 0
-else
-    pathtoimgtar="$1"
-fi
-
 jkpremsg; echo "${cuid}"
-setnetworkvars
+# setnetworkvars
 
-if [[ ! -d "${mountpoint}" ]]; then mkdir "${mountpoint}"; fi
-if [[ ! -d "${conoverlayfs}" ]]; then 
-    mkdir "${conoverlayfs}"
-    chmod 700 "${conoverlayfs}"
-    mkdir "${conoverlayfs}/base" \
-        "${conoverlayfs}/diff" \
-        "${conoverlayfs}/overlay" \
-        "${conoverlayfs}/work" 
-else 
-    jkpremsg; printf "${warn}Whoops that cuid already exists, try again.\n"
-    exit 0
+if [[ "${isnewcontainer}" == "true" ]]; then
+    setupoverlayfs
 fi
-
-basedir="${conoverlayfs}/base"
-overlaydir="${conoverlayfs}/overlay"
-
-tar -xf "${pathtoimgtar}" --directory "${basedir}"
-mount -t overlay -o lowerdir="${basedir}",upperdir="${conoverlayfs}/diff",workdir="${conoverlayfs}/work" jkoverlay "${overlaydir}"
 
 trap "jkpremsg; echo 'Thanks, come again!'" EXIT
 
-# check if source file already exists
-if [[ -f "${overlaydir}/${sourcefile}" ]]; then
-    echo "" > "${overlaydir}/${sourcefile}"
-fi
+# overwrite source file if already exists or create if not
+echo "#!/usr/bin/env sh" > "${overlaydir}/${sourcefile}"
+echo "#!/usr/bin/env sh" > "${overlaydir}/${netsourcefile}"
 
-if [[ -f "${overlaydir}/${netsourcefile}" ]]; then
-    echo "" > "${overlaydir}/${netsourcefile}"
-fi
+# make sourcefiles executable
+chmod +x "${overlaydir}/${sourcefile}"
+chmod +x "${overlaydir}/${netsourcefile}"
 
 # commands to execute inside containerized process
 cmds=(\
     "mount -t proc proc /proc" \
+    "############## Begin Setup Cgroups ##############" \
     "mount -t sysfs sysfs /sys" \
     "mount -t tmpfs cgroup /sys/fs/cgroup" \
     "mkdir /sys/fs/cgroup/memory" \
@@ -162,29 +182,41 @@ cmds=(\
     "mount -t cgroup -o perf_event,nosuid,nodev,noexec cgroup /sys/fs/cgroup/perf_event/" \
     "mount -t cgroup -o name=systemd,nosuid,nodev,noexec,xattr cgroup /sys/fs/cgroup/systemd/" \
     "echo 1 > /sys/fs/cgroup/cpuset/cgroup.clone_children" \
-    "if [[ ! -d /sys/fs/cgroup/memory/jkrun ]]; then mkdir /sys/fs/cgroup/memory/jkrun; fi" \
-    "if [[ ! -d /sys/fs/cgroup/blkio/jkrun ]]; then mkdir /sys/fs/cgroup/blkio/jkrun; fi" \
-    "if [[ ! -d /sys/fs/cgroup/pids/jkrun ]]; then mkdir /sys/fs/cgroup/pids/jkrun; fi" \
-    "if [[ ! -d /sys/fs/cgroup/rdma/jkrun ]]; then mkdir /sys/fs/cgroup/rdma/jkrun; fi" \
-    "if [[ ! -d /sys/fs/cgroup/freezer/jkrun ]]; then mkdir /sys/fs/cgroup/freezer/jkrun; fi" \
-    "if [[ ! -d /sys/fs/cgroup/devices/jkrun ]]; then mkdir /sys/fs/cgroup/devices/jkrun; fi" \
-    "if [[ ! -d /sys/fs/cgroup/cpuset/jkrun ]]; then mkdir /sys/fs/cgroup/cpuset/jkrun; fi" \
-    "if [[ ! -d /sys/fs/cgroup/cpu,cpuacct/jkrun ]]; then mkdir /sys/fs/cgroup/cpu,cpuacct/jkrun; fi" \
-    "if [[ ! -d /sys/fs/cgroup/hugetlb/jkrun ]]; then mkdir /sys/fs/cgroup/hugetlb/jkrun; fi" \
-    "if [[ ! -d /sys/fs/cgroup/misc/jkrun ]]; then mkdir /sys/fs/cgroup/misc/jkrun; fi" \
-    "if [[ ! -d /sys/fs/cgroup/net_cls,net_prio/jkrun ]]; then mkdir /sys/fs/cgroup/net_cls,net_prio/jkrun; fi" \
-    "if [[ ! -d /sys/fs/cgroup/perf_event/jkrun ]]; then mkdir /sys/fs/cgroup/perf_event/jkrun; fi" \
-    "if [[ ! -d /sys/fs/cgroup/systemd/jkrun ]]; then mkdir /sys/fs/cgroup/systemd/jkrun; fi" \
+    "if [ ! -d /sys/fs/cgroup/memory/jkrun ]; then mkdir /sys/fs/cgroup/memory/jkrun; fi" \
+    "if [ ! -d /sys/fs/cgroup/blkio/jkrun ]; then mkdir /sys/fs/cgroup/blkio/jkrun; fi" \
+    "if [ ! -d /sys/fs/cgroup/pids/jkrun ]; then mkdir /sys/fs/cgroup/pids/jkrun; fi" \
+    "if [ ! -d /sys/fs/cgroup/rdma/jkrun ]; then mkdir /sys/fs/cgroup/rdma/jkrun; fi" \
+    "if [ ! -d /sys/fs/cgroup/freezer/jkrun ]; then mkdir /sys/fs/cgroup/freezer/jkrun; fi" \
+    "if [ ! -d /sys/fs/cgroup/devices/jkrun ]; then mkdir /sys/fs/cgroup/devices/jkrun; fi" \
+    "if [ ! -d /sys/fs/cgroup/cpuset/jkrun ]; then mkdir /sys/fs/cgroup/cpuset/jkrun; fi" \
+    "if [ ! -d /sys/fs/cgroup/cpu,cpuacct/jkrun ]; then mkdir /sys/fs/cgroup/cpu,cpuacct/jkrun; fi" \
+    "if [ ! -d /sys/fs/cgroup/hugetlb/jkrun ]; then mkdir /sys/fs/cgroup/hugetlb/jkrun; fi" \
+    "if [ ! -d /sys/fs/cgroup/misc/jkrun ]; then mkdir /sys/fs/cgroup/misc/jkrun; fi" \
+    "if [ ! -d /sys/fs/cgroup/net_cls,net_prio/jkrun ]; then mkdir /sys/fs/cgroup/net_cls,net_prio/jkrun; fi" \
+    "if [ ! -d /sys/fs/cgroup/perf_event/jkrun ]; then mkdir /sys/fs/cgroup/perf_event/jkrun; fi" \
+    "if [ ! -d /sys/fs/cgroup/systemd/jkrun ]; then mkdir /sys/fs/cgroup/systemd/jkrun; fi" \
     "cd /sys/fs/cgroup" \
     "echo 1 | tee memory/jkrun/cgroup.procs blkio/jkrun/cgroup.procs cpu,cpuacct/jkrun/cgroup.procs devices/jkrun/cgroup.procs freezer/jkrun/cgroup.procs hugetlb/jkrun/cgroup.procs misc/jkrun/cgroup.procs net_cls,net_prio/jkrun/cgroup.procs perf_event/jkrun/cgroup.procs pids/jkrun/cgroup.procs rdma/jkrun/cgroup.procs > systemd/jkrun/cgroup.procs" \
     "cd /" \
+    "############## End Setup Cgroups ##############" \
+    "############## Begin Setup Devices ##############" \
+    "#mkdir /dev/null" \
+    "#mkdir /dev/tty" \
+    "#mount -t devtmpfs"
+    "############## End Setup Devices ##############" \
     "hostname jkrun" \
 )
 
+# udev on /dev/null type devtmpfs (rw,nosuid,noexec,relatime,size=1957816k,nr_inodes=489454,mode=755,inode64)
+# udev on /dev/tty type devtmpfs (rw,nosuid,noexec,relatime,size=1957816k,nr_inodes=489454,mode=755,inode64)
+
+
 netcmds=(\
     "sleep 2"
-    "ip link set ${newconve} up" \
-    "ip addr add ${conveip}/24 dev ${newconve} &>/dev/null" \
+    "if [ \$(which ip; echo \$?) -ne 1 ]; then" \
+    "   ip link set ${newconve} up" \
+    "   ip addr add ${conveip}/24 dev ${newconve} &>/dev/null" \
+    "fi"
 )
 
 for cmd in "${cmds[@]}"; do
@@ -195,7 +227,7 @@ for netcmd in "${netcmds[@]}"; do
     echo "$netcmd" >> "${overlaydir}/${netsourcefile}"
 done
 
-setupnetwork &
+# setupnetwork &
 
 unshare \
     --uts \
@@ -204,4 +236,4 @@ unshare \
     --mount \
     --net \
     --cgroup \
-    chroot "${overlaydir}" /bin/sh -c '. '"${sourcefile}"'; . '"${netsourcefile}"';printf "\e[0m"; exec /bin/sh'
+    chroot "${overlaydir}" /bin/sh -c './'"${sourcefile}"';printf "\e[0m"; exec /bin/sh'
