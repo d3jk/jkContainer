@@ -12,6 +12,7 @@ Very limited compatibility.
 Developed and tested for use with Ubuntu 20.04 host and Alpine rootfs tar file.
 
 ## Usage
+Add jkrun bash script to `$PATH`
 ### Run jkcontainer from tar file
 `sudo jkrun -r path/to/image.tar`
 
