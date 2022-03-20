@@ -6,6 +6,11 @@ A rather clumsy container runtime written for fun in `bash`...just because...
 ## Disclaimer - This is a work-in-progress
 Many limitations and bugs and probably many breaking changes will be introduced frequently. You've been warned!
 
+## Compatibility
+Very limited compatibility. 
+
+Developed and tested for use with Ubuntu 20.04 host and Alpine rootfs tar file.
+
 ## Usage
 ### Run jkcontainer from tar file
 `sudo jkrun -r path/to/image.tar`
