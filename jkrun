@@ -10,6 +10,7 @@ netsourcefile=".netsourcefile"
 mountpoint="/var/lib/jkrun"
 cuid=$((1000 + $RANDOM % 9000))
 isnewcontainer="true"
+dosetupnetwork="false"
 
 function jkpremsg() { printf "\e[0;36m|jkrun-> ${info}"; }
 
@@ -17,13 +18,32 @@ function jkmsg() {
     jkpremsg; for i in {1..12}; do printf ' '; done
 }
 
-while getopts 'ls:r:' OPTION; do
+while getopts 'd:lns:r:' OPTION; do
     case "$OPTION" in
+    d)
+        # permission check
+        if [[ $(id -u) != 0 ]]; then jkpremsg; printf "${warn}permission denied, are you root?\n"; exit 1; fi
+        
+        requestedcuid=$(ls ${mountpoint} | grep "^${OPTARG}$")
+        if [[ "${requestedcuid}" != "" ]]; then
+            cuid=${OPTARG}
+            umount /var/lib/jkrun/${cuid}/overlay
+            rm -rf "${mountpoint}/${cuid}"
+            jkpremsg; printf "${info}deleted container \"${cuid}\"\n"
+            exit 0
+        else
+            jkpremsg; printf "${warn}not found: unable to find container \"${OPTARG}\"\n"
+            exit 1
+        fi
+        ;;
     l)
         jkpremsg; echo "Containers:"
         containers=$(ls -l ${mountpoint} | grep -Po "[0-9]{4,5}$")
         for container in ${containers}; do jkmsg; echo "${container}"; done
         exit 0
+        ;;
+    n)
+        dosetupnetwork="true"
         ;;
     s)
         requestedcuid=$(ls ${mountpoint} | grep "^${OPTARG}$")
@@ -76,8 +96,10 @@ function setupoverlayfs() {
     mount -t overlay -o lowerdir="${basedir}",upperdir="${diffdir}",workdir="${workdir}" jkoverlay "${overlaydir}"
 }
 
+########## Setup basic networking ##########
+##### `-n` flag set  #####
+
 function networksetupcheck() {
-    dosetupnetwork="true"
     if [[ -v ${hostvenum} || -v ${convenum} ]]; then 
         jkpremsg; printf "${info}Unable to setup network virtual ethernet\n" 
     fi
@@ -127,9 +149,9 @@ function setupnetwork() {
 # ip addr add 192.168.1.100/24 dev ve1
 # ping 192.168.1.200
 ######################
+############# End network setup ############
 
 jkpremsg; echo "${cuid}"
-# setnetworkvars
 
 if [[ "${isnewcontainer}" == "true" ]]; then
     setupoverlayfs
@@ -210,24 +232,23 @@ cmds=(\
 # udev on /dev/null type devtmpfs (rw,nosuid,noexec,relatime,size=1957816k,nr_inodes=489454,mode=755,inode64)
 # udev on /dev/tty type devtmpfs (rw,nosuid,noexec,relatime,size=1957816k,nr_inodes=489454,mode=755,inode64)
 
-
-netcmds=(\
-    "sleep 2"
-    "if [ \$(which ip; echo \$?) -ne 1 ]; then" \
-    "   ip link set ${newconve} up" \
-    "   ip addr add ${conveip}/24 dev ${newconve} &>/dev/null" \
-    "fi"
-)
-
 for cmd in "${cmds[@]}"; do
     echo "$cmd" >> "${overlaydir}/${sourcefile}"
 done
 
-for netcmd in "${netcmds[@]}"; do
-    echo "$netcmd" >> "${overlaydir}/${netsourcefile}"
-done
+if [[ "${dosetupnetwork}" == "true" ]]; then
+    setnetworkvars
+    netcmds=(\
+        "sleep 2"
+        "ip link set ${newconve} up" \
+        "ip addr add ${conveip}/24 dev ${newconve} &>/dev/null" \
+    )
 
-# setupnetwork &
+    for netcmd in "${netcmds[@]}"; do
+        echo "$netcmd" >> "${overlaydir}/${netsourcefile}"
+    done
+    setupnetwork &
+fi
 
 unshare \
     --uts \
@@ -236,4 +257,4 @@ unshare \
     --mount \
     --net \
     --cgroup \
-    chroot "${overlaydir}" /bin/sh -c './'"${sourcefile}"';printf "\e[0m"; exec /bin/sh'
+    chroot "${overlaydir}" /bin/sh -c './'"${sourcefile}"';./'"${netsourcefile}"';printf "\e[0m"; exec /bin/sh'
