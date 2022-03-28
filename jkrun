@@ -240,8 +240,31 @@ chmod +x "${overlaydir}/${netsourcefile}"
 
 # commands to execute inside containerized process
 cmds=(\
-    "mount -t sysfs sysfs /sys" \
     "mount -t proc proc /proc" \
+    "############## Begin Setup Devices ##############" \
+    "mount -t tmpfs -o nosuid,size=65536k,mode=755 dev_tmpfs /dev" \
+    "mknod /dev/console c 136 0 -m 620" \
+    "chgrp tty /dev/console" \
+    "mknod /dev/tty c 5 0 -m 666" \
+    "ln -s /proc/self/fd/2 /dev/stderr" \
+    "ln -s /proc/self/fd/0 /dev/stdin" \
+    "ln -s /proc/self/fd/1 /dev/stdout" \
+    "ln -s /proc/kcore /dev/core" \
+    "ln -s /proc/self/fd /dev/fd" \
+    "mkdir /dev/pts" \
+    "mount -t devpts -o ptmxmode=666 devpts /dev/pts"
+    "ln -s /dev/pts/ptmx /dev/ptmx"
+    "mkdir /dev/mqueue && chmod +xt /dev/mqueue" \
+    "mount -t mqueue -o nosuid,nodev,noexec,relatime mqueue /dev/mqueue" \
+    "mkdir /dev/shm && chmod +xt /dev/shm" \
+    "mount -t tmpfs shm_tmpfs /dev/shm" \
+    "mknod /dev/null c 1 3 -m 666" \
+    "mknod /dev/zero c 1 5 -m 666" \
+    "mknod /dev/full c 1 7 -m 666" \
+    "mknod /dev/random c 1 8 -m 666" \
+    "mknod /dev/urandom c 1 9 -m 666" \
+    "############## End Setup Devices ##############" \
+    "mount -t sysfs sysfs /sys" \
     "############## Begin Setup Cgroups ##############" \
     "mount -t tmpfs cgroup /sys/fs/cgroup" \
     "mkdir /sys/fs/cgroup/memory" \
@@ -294,35 +317,8 @@ cmds=(\
     "echo 100 > pids/jkrun/pids.max" \
     "cd /" \
     "############## End Setup Cgroups ##############" \
-    "############## Begin Setup Devices ##############" \
-    "# mount -t devtmpfs -o nosuid,noexec,relatime,size=1957816k,nr_inodes=489454,mode=755 udev /dev" \
-    "# rm -rf /dev/dri /dev/disk /dev/bsg /dev/block /dev/input /dev/bus /dev/lightnvm" \
-    "# find /dev -type f -regex '/dev/[^cfmnprstuz][a-z]+' -delete" \
-    "# find /dev -regex '/dev/tty[S]?[0-9]+' -delete" \
-    "# mount -t tmpfs dev_tmpfs /dev" \
-    "# ln -s /proc/self/fd/2 /dev/stderr" \
-    "# ln -s /proc/self/fd/0 /dev/stdin" \
-    "# ln -s /proc/self/fd/1 /dev/stdout" \
-    "# ln -s /proc/kcore /dev/core" \
-    "# ln -s /proc/self/fd /dev/fd" \
-    "# mkdir /dev/pts" \
-    "# mount -t devpts -o ptmxmode=666 devpts /dev/pts"
-    "# ln -s /dev/pts/ptmx /dev/ptmx"
-    "# mkdir /dev/mqueue && chmod +xt /dev/mqueue" \
-    "# mount -t mqueue -o nosuid,nodev,noexec,relatime mqueue /dev/mqueue" \
-    "# mkdir /dev/shm && chmod +xt /dev/shm" \
-    "# mount -t tmpfs shm_tmpfs /dev/shm" \
-    "# mknod /dev/null c 1 3 -m 666" \
-    "############## End Setup Devices ##############" \
     "hostname jkrun" \
 )
-# /dev/ptmx
-
-# Lunux required device files...
-# full, null, random, tty, urandom, zero
-
-# udev on /dev/null type devtmpfs (rw,nosuid,noexec,relatime,size=1957816k,nr_inodes=489454,mode=755,inode64)
-# udev on /dev/tty type devtmpfs (rw,nosuid,noexec,relatime,size=1957816k,nr_inodes=489454,mode=755,inode64)
 
 for cmd in "${cmds[@]}"; do
     echo "$cmd" >> "${overlaydir}/${sourcefile}"
