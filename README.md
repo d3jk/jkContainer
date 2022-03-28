@@ -36,7 +36,7 @@ Run with very basic network setup
 
 `sudo jkrun -nr path/to/image.tar /bin/sh`
 ```
-user@ubuntu:~$ sudo jkrun -nr alpine35.tar
+user@ubuntu:~$ sudo jkrun -nr alpine35.tar /bin/sh
 |jkrun-> 9276
 |jkrun-> Host IP: 192.168.3.200
 |jkrun-> Container IP: 192.168.3.100
