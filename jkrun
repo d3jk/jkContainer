@@ -77,7 +77,7 @@ for arg in $*; do
                                     rm -rf "${mountpoint}/${cuid}"
                                     jkpremsg; printf "${info}deleted container \"${cuid}\"\n"
                                 else
-                                    jkpremsg; printf "${warn}not found: unable to find container '\"${requestedcuid}\"'\n"
+                                    jkpremsg; printf "${warn}not found: unable to find container '\"${argspassedarray[$d]}\"'\n"
                                 fi
                             done
                             exit 0
@@ -122,17 +122,17 @@ for arg in $*; do
                                 isnewcontainer="false"
                                 jkpremsg; printf "${info}starting container \"${cuid}\"\n"
                             else
-                                jkpremsg; printf "${warn}not found: unable to find container \"${requestedcuid}\"\n"
+                                jkpremsg; printf "${warn}not found: unable to find container \"${argspassedarray[1]}\"\n"
                                 exit 1
                             fi
                         else
-                            jkpremsg; printf "${warn}the '-${flag}' flag requires exactly 1 arg\n"
-                            jkpremsg; printf "${warn}Ex. sudo jkrun -s 1234"
+                            jkpremsg; printf "${warn}the '-${flag}' flag requires more than 1 arg\n"
+                            jkpremsg; printf "${warn}Ex. sudo jkrun -s 1234 /bin/sh\n"
                             exit 1 
                         fi
                     else
-                        jkpremsg; printf "${warn}the '-${flag}' must be passed as the first arg"
-                        jkpremsg; printf "${warn}Ex. sudo jkrun -s 1234"
+                        jkpremsg; printf "${warn}the '-${flag}' must be passed as the first arg\n"
+                        jkpremsg; printf "${warn}Ex. sudo jkrun -s 1234 /bin/sh\n"
                         exit 1
                     fi
                 ;;
@@ -154,8 +154,7 @@ workdir="${conoverlayfs}/work"
 function setupoverlayfs() {
     if [[ ! -d "${mountpoint}" ]]; then mkdir "${mountpoint}"; fi
     if [[ ! -d "${conoverlayfs}" ]]; then 
-        mkdir "${conoverlayfs}"
-        chmod 700 "${conoverlayfs}"
+        mkdir -m 700 "${conoverlayfs}"
         mkdir "${basedir}" \
             "${diffdir}" \
             "${overlaydir}" \
@@ -170,14 +169,16 @@ function setupoverlayfs() {
 }
 
 function hostpid() {
-    perentpid=$(ps ajf | grep -E "unshare.*/${cuid}/" | grep -v "grep" | grep -Po "^\s+[0-9]{1,6}\s+\K[0-9]{1,6}")
-    if [[ "${perentpid}" != "" ]]; then
-        conpid=$(pgrep -P "${perentpid}")
-        if [[ "${conpid}" != "" && -d "${mountpoint}/${cuid}" ]]; then
-            echo "${conpid}"
-        else
-            echo "none"
-        fi
+    conpids=()
+    perentpid=($(ps ajf | grep -E "unshare.*/${cuid}/" | grep -v "grep" | grep -Po "^\s+[0-9]{1,6}\s+\K[0-9]{1,6}"))
+    if [[ "${perentpid[@]}" != "" ]]; then
+        for pid in "${perentpid[@]}"; do
+            conpid=$(pgrep -P "${pid}")
+            if [[ "${conpid}" != "" && -d "${mountpoint}/${cuid}" ]]; then
+                conpids+=("${conpid}")
+            fi
+        done
+        echo "${conpids[@]}"
     else
         echo "none"
     fi
@@ -215,14 +216,12 @@ function setnetworkvars() {
     jkpremsg; echo "Container IP: ${conveip}"
 }
 
+# run in background
 function setupnetwork() {
-    # run in background
-    # perentpid=$(ps ajf | grep -E "unshare.*/${cuid}/" | grep -v "grep" | grep -Po "^\s+[0-9]{1,6}\s+\K[0-9]{1,6}")
-    # conpid=$(pgrep -P "${perentpid}")
-    conpid=$(hostpid)
-    if [[ "${conpid}" != "none" ]]; then
+    conpid=($(hostpid))
+    if [[ "${conpid[@]}" != "none" && "${conpid[@]}" != "" ]]; then
         networksetupcheck
-        sleep 1 
+        sleep 0.1 
         ip link add "${newconve}" netns ${conpid} type veth peer name "${newhostve}" netns 1
         ip link set "${newhostve}" up
         ip addr add ${hostveip}/24 dev "${newhostve}"
@@ -238,7 +237,7 @@ function setupnetwork() {
 # ip link add ve1 netns 28966 type veth peer name ve2 netns 1
 # ip link set ve2 up
 # ip addr add 192.168.1.200/24 dev ve2
-### CONT
+### CONTAINER
 # ip link set ve1 up
 # ip addr add 192.168.1.100/24 dev ve1
 # ping 192.168.1.200
@@ -261,46 +260,68 @@ echo "#!/usr/bin/env sh" > "${overlaydir}/${netsourcefile}"
 chmod +x "${overlaydir}/${sourcefile}"
 chmod +x "${overlaydir}/${netsourcefile}"
 
-############ Setup cgroup ############
-function setupcgroups() {
-    sleep 0.1
-    hostpid=$(hostpid)
-    if [[ "${hostpid}" != "none" ]]; then
-        mkdir -p /sys/fs/cgroup/memory/jkrun/${cuid}
-        mkdir -p /sys/fs/cgroup/blkio/jkrun/${cuid}
-        mkdir -p /sys/fs/cgroup/pids/jkrun/${cuid}
-        mkdir -p /sys/fs/cgroup/rdma/jkrun/${cuid}
-        mkdir -p /sys/fs/cgroup/freezer/jkrun/${cuid}
-        mkdir -p /sys/fs/cgroup/devices/jkrun/${cuid}
-        mkdir -p /sys/fs/cgroup/cpuset/jkrun/${cuid}
-        mkdir -p /sys/fs/cgroup/cpu,cpuacct/jkrun/${cuid}
-        mkdir -p /sys/fs/cgroup/hugetlb/jkrun/${cuid}
-        mkdir -p /sys/fs/cgroup/misc/jkrun/${cuid}
-        mkdir -p /sys/fs/cgroup/net_cls,net_prio/jkrun/${cuid}
-        mkdir -p /sys/fs/cgroup/perf_event/jkrun/${cuid}
-        mkdir -p /sys/fs/cgroup/systemd/jkrun/${cuid}
-        echo ${hostpid} | tee \
-            /sys/fs/cgroup/memory/jkrun/${cuid}/cgroup.procs \
-            /sys/fs/cgroup/blkio/jkrun/${cuid}/cgroup.procs \
-            /sys/fs/cgroup/cpu,cpuacct/jkrun/${cuid}/cgroup.procs \
-            /sys/fs/cgroup/devices/jkrun/${cuid}/cgroup.procs \
-            /sys/fs/cgroup/freezer/jkrun/${cuid}/cgroup.procs \
-            /sys/fs/cgroup/hugetlb/jkrun/${cuid}/cgroup.procs \
-            /sys/fs/cgroup/misc/jkrun/${cuid}/cgroup.procs \
-            /sys/fs/cgroup/net_cls,net_prio/jkrun/${cuid}/cgroup.procs \
-            /sys/fs/cgroup/perf_event/jkrun/${cuid}/cgroup.procs \
-            /sys/fs/cgroup/pids/jkrun/${cuid}/cgroup.procs \
-            /sys/fs/cgroup/rdma/jkrun/${cuid}/cgroup.procs > \
-            /sys/fs/cgroup/systemd/jkrun/${cuid}/cgroup.procs
-        echo 1000000000 > /sys/fs/cgroup/memory/jkrun/${cuid}/memory.limit_in_bytes
-        echo 100 > /sys/fs/cgroup/pids/jkrun/${cuid}/pids.max
+function addcgrouppid() {
+    if [[ "$1" != "" ]]; then
+        currentwd=$(pwd)
+        cd /sys/fs/cgroup/
+        echo "$1" | tee \
+            memory/jkrun/${cuid}/cgroup.procs \
+            blkio/jkrun/${cuid}/cgroup.procs \
+            cpu,cpuacct/jkrun/${cuid}/cgroup.procs \
+            devices/jkrun/${cuid}/cgroup.procs \
+            freezer/jkrun/${cuid}/cgroup.procs \
+            hugetlb/jkrun/${cuid}/cgroup.procs \
+            misc/jkrun/${cuid}/cgroup.procs \
+            net_cls,net_prio/jkrun/${cuid}/cgroup.procs \
+            perf_event/jkrun/${cuid}/cgroup.procs \
+            pids/jkrun/${cuid}/cgroup.procs \
+            rdma/jkrun/${cuid}/cgroup.procs \
+            systemd/jkrun/${cuid}/cgroup.procs \
+            >/dev/null
+        cd "${currentwd}"
     else
-        jkpremsg; printf "${warn}Whoops an error occured during cgroup setup.\n"
-        jkpremsg; printf "${warn}Unable to setup cgroups.\n"
+        jkpremsg; printf "${warn}Whoops an error occured during cgroup setup (CG9463736)\n"
+        jkpremsg; printf "${warn}Unable to setup cgroups\n"
     fi
 }
 
-########## End cgroup setup ##########
+# run in background
+function setupcgroups() {
+    # need time for container pid to show up on host 
+    sleep 0.1
+    hostpid=($(hostpid))
+    if [[ ! -d /sys/fs/cgroup/memory/jkrun/${cuid} && "${hostpid[@]}" != "none" && "${hostpid[@]}" != "" ]]; then
+        mkdir -pm 600 /sys/fs/cgroup/memory/jkrun/${cuid}
+        mkdir -pm 600 /sys/fs/cgroup/blkio/jkrun/${cuid}
+        mkdir -pm 600 /sys/fs/cgroup/pids/jkrun/${cuid}
+        mkdir -pm 600 /sys/fs/cgroup/rdma/jkrun/${cuid}
+        mkdir -pm 600 /sys/fs/cgroup/freezer/jkrun/${cuid}
+        mkdir -pm 600 /sys/fs/cgroup/devices/jkrun/${cuid}
+        mkdir -pm 600 /sys/fs/cgroup/cpuset/jkrun/${cuid}
+        mkdir -pm 600 /sys/fs/cgroup/cpu,cpuacct/jkrun/${cuid}
+        mkdir -pm 600 /sys/fs/cgroup/hugetlb/jkrun/${cuid}
+        mkdir -pm 600 /sys/fs/cgroup/misc/jkrun/${cuid}
+        mkdir -pm 600 /sys/fs/cgroup/net_cls,net_prio/jkrun/${cuid}
+        mkdir -pm 600 /sys/fs/cgroup/perf_event/jkrun/${cuid}
+        mkdir -pm 600 /sys/fs/cgroup/systemd/jkrun/${cuid}
+        
+        echo 1000000000 > /sys/fs/cgroup/memory/jkrun/${cuid}/memory.limit_in_bytes
+        echo 100 > /sys/fs/cgroup/pids/jkrun/${cuid}/pids.max
+
+        addcgrouppid "${hostpid}"
+
+    elif [[ -d /sys/fs/cgroup/memory/jkrun/${cuid} && "${hostpid[@]}" != "none" && "${hostpid[@]}" != "" ]]; then
+        for hpid in "${hostpid[@]}"; do
+            pidincgroup=$(cat /sys/fs/cgroup/memory/jkrun/${cuid}/cgroup.procs | grep "${hpid}")
+            if [[ "${pidincgroup}" == "" ]]; then
+                addcgrouppid "${hpid}"
+            fi
+        done
+    else
+        jkpremsg; printf "${warn}Whoops an error occured during cgroup setup (CG9484748)\n"
+        jkpremsg; printf "${warn}Unable to setup cgroups\n"
+    fi
+}
 
 # commands to execute inside containerized process
 cmds=(\
@@ -329,96 +350,38 @@ cmds=(\
     "mknod /dev/urandom c 1 9 -m 666" \
     "############## End Setup Devices ##############" \
     "mount -t sysfs sysfs /sys" \
-    "############## Begin Setup Cgroups ##############" \
-    "# mount -t tmpfs cgroup /sys/fs/cgroup" \
-    "# mkdir /sys/fs/cgroup/memory" \
-    "# mkdir /sys/fs/cgroup/blkio" \
-    "# mkdir /sys/fs/cgroup/pids" \
-    "# mkdir /sys/fs/cgroup/rdma" \
-    "# mkdir /sys/fs/cgroup/freezer" \
-    "# mkdir /sys/fs/cgroup/devices" \
-    "# mkdir /sys/fs/cgroup/cpuset" \
-    "# mkdir /sys/fs/cgroup/cpu,cpuacct" \
-    "# mkdir /sys/fs/cgroup/hugetlb" \
-    "# mkdir /sys/fs/cgroup/misc" \
-    "# mkdir /sys/fs/cgroup/net_cls,net_prio" \
-    "# mkdir /sys/fs/cgroup/perf_event" \
-    "# mkdir /sys/fs/cgroup/systemd" \
-    "# cd /sys/fs/cgroup" \
-    "# ln -s cpu,cpuacct cpu && ln -s cpu,cpuacct cpuacct" \
-    "# ln -s net_cls,net_prio net_cls && ln -s net_cls,net_prio net_prio" \
-    "# cd /" \
-    "# mount -t cgroup -o memory,nosuid,nodev,noexec cgroup /sys/fs/cgroup/memory/" \
-    "# mount -t cgroup -o blkio,nosuid,nodev,noexec cgroup /sys/fs/cgroup/blkio/" \
-    "# mount -t cgroup -o pids,nosuid,nodev,noexec cgroup /sys/fs/cgroup/pids/" \
-    "# mount -t cgroup -o rdma,nosuid,nodev,noexec cgroup /sys/fs/cgroup/rdma/" \
-    "# mount -t cgroup -o freezer,nosuid,nodev,noexec cgroup /sys/fs/cgroup/freezer/" \
-    "# mount -t cgroup -o devices,nosuid,nodev,noexec cgroup /sys/fs/cgroup/devices/" \
-    "# mount -t cgroup -o cpuset,nosuid,nodev,noexec cgroup /sys/fs/cgroup/cpuset/" \
-    "# mount -t cgroup -o cpu,cpuacct,nosuid,nodev,noexec cgroup /sys/fs/cgroup/cpu,cpuacct/" \
-    "# mount -t cgroup -o hugetlb,nosuid,nodev,noexec cgroup /sys/fs/cgroup/hugetlb/" \
-    "# mount -t cgroup -o misc,nosuid,nodev,noexec cgroup /sys/fs/cgroup/misc/" \
-    "# mount -t cgroup -o net_cls,net_prio,nosuid,nodev,noexec cgroup /sys/fs/cgroup/net_cls,net_prio/" \
-    "# mount -t cgroup -o perf_event,nosuid,nodev,noexec cgroup /sys/fs/cgroup/perf_event/" \
-    "# mount -t cgroup -o name=systemd,nosuid,nodev,noexec,xattr cgroup /sys/fs/cgroup/systemd/" \
-    "# echo 1 > /sys/fs/cgroup/cpuset/cgroup.clone_children" \
-    "# if [ ! -d /sys/fs/cgroup/memory/jkrun ]; then mkdir /sys/fs/cgroup/memory/jkrun; fi" \
-    "# if [ ! -d /sys/fs/cgroup/blkio/jkrun ]; then mkdir /sys/fs/cgroup/blkio/jkrun; fi" \
-    "# if [ ! -d /sys/fs/cgroup/pids/jkrun ]; then mkdir /sys/fs/cgroup/pids/jkrun; fi" \
-    "# if [ ! -d /sys/fs/cgroup/rdma/jkrun ]; then mkdir /sys/fs/cgroup/rdma/jkrun; fi" \
-    "# if [ ! -d /sys/fs/cgroup/freezer/jkrun ]; then mkdir /sys/fs/cgroup/freezer/jkrun; fi" \
-    "# if [ ! -d /sys/fs/cgroup/devices/jkrun ]; then mkdir /sys/fs/cgroup/devices/jkrun; fi" \
-    "# if [ ! -d /sys/fs/cgroup/cpuset/jkrun ]; then mkdir /sys/fs/cgroup/cpuset/jkrun; fi" \
-    "# if [ ! -d /sys/fs/cgroup/cpu,cpuacct/jkrun ]; then mkdir /sys/fs/cgroup/cpu,cpuacct/jkrun; fi" \
-    "# if [ ! -d /sys/fs/cgroup/hugetlb/jkrun ]; then mkdir /sys/fs/cgroup/hugetlb/jkrun; fi" \
-    "# if [ ! -d /sys/fs/cgroup/misc/jkrun ]; then mkdir /sys/fs/cgroup/misc/jkrun; fi" \
-    "# if [ ! -d /sys/fs/cgroup/net_cls,net_prio/jkrun ]; then mkdir /sys/fs/cgroup/net_cls,net_prio/jkrun; fi" \
-    "# if [ ! -d /sys/fs/cgroup/perf_event/jkrun ]; then mkdir /sys/fs/cgroup/perf_event/jkrun; fi" \
-    "# if [ ! -d /sys/fs/cgroup/systemd/jkrun ]; then mkdir /sys/fs/cgroup/systemd/jkrun; fi" \
-    "# if [ ! -d /sys/fs/cgroup/memory/jkrun/${cuid} ]; then mkdir /sys/fs/cgroup/memory/jkrun/${cuid}; fi" \
-    "# if [ ! -d /sys/fs/cgroup/blkio/jkrun/${cuid} ]; then mkdir /sys/fs/cgroup/blkio/jkrun/${cuid}; fi" \
-    "# if [ ! -d /sys/fs/cgroup/pids/jkrun/${cuid} ]; then mkdir /sys/fs/cgroup/pids/jkrun/${cuid}; fi" \
-    "# if [ ! -d /sys/fs/cgroup/rdma/jkrun/${cuid} ]; then mkdir /sys/fs/cgroup/rdma/jkrun/${cuid}; fi" \
-    "# if [ ! -d /sys/fs/cgroup/freezer/jkrun/${cuid} ]; then mkdir /sys/fs/cgroup/freezer/jkrun/${cuid}; fi" \
-    "# if [ ! -d /sys/fs/cgroup/devices/jkrun/${cuid} ]; then mkdir /sys/fs/cgroup/devices/jkrun/${cuid}; fi" \
-    "# if [ ! -d /sys/fs/cgroup/cpuset/jkrun/${cuid} ]; then mkdir /sys/fs/cgroup/cpuset/jkrun/${cuid}; fi" \
-    "# if [ ! -d /sys/fs/cgroup/cpu,cpuacct/jkrun/${cuid}/jkrun ]; then mkdir /sys/fs/cgroup/cpu,cpuacct/jkrun/${cuid}; fi" \
-    "# if [ ! -d /sys/fs/cgroup/hugetlb/jkrun/${cuid} ]; then mkdir /sys/fs/cgroup/hugetlb/jkrun/${cuid}; fi" \
-    "# if [ ! -d /sys/fs/cgroup/misc/jkrun/${cuid} ]; then mkdir /sys/fs/cgroup/misc/jkrun/${cuid}; fi" \
-    "# if [ ! -d /sys/fs/cgroup/net_cls,net_prio/jkrun/${cuid}/jkrun ]; then mkdir /sys/fs/cgroup/net_cls,net_prio/jkrun/${cuid}; fi" \
-    "# if [ ! -d /sys/fs/cgroup/perf_event/jkrun/${cuid} ]; then mkdir /sys/fs/cgroup/perf_event/jkrun/${cuid}; fi" \
-    "# if [ ! -d /sys/fs/cgroup/systemd/jkrun/${cuid} ]; then mkdir /sys/fs/cgroup/systemd/jkrun/${cuid}; fi" \
-    "# cd /sys/fs/cgroup" \
-    "# echo 1 | tee memory/jkrun/${cuid}/cgroup.procs blkio/jkrun/${cuid}/cgroup.procs cpu,cpuacct/jkrun/${cuid}/cgroup.procs devices/jkrun/${cuid}/cgroup.procs freezer/jkrun/${cuid}/cgroup.procs hugetlb/jkrun/${cuid}/cgroup.procs misc/jkrun/${cuid}/cgroup.procs net_cls,net_prio/jkrun/${cuid}/cgroup.procs perf_event/jkrun/${cuid}/cgroup.procs pids/jkrun/${cuid}/cgroup.procs rdma/jkrun/${cuid}/cgroup.procs > systemd/jkrun/${cuid}/cgroup.procs" \
-    "# echo 1000000000 > memory/jkrun/${cuid}/memory.limit_in_bytes" \
-    "# echo 100 > pids/jkrun/${cuid}/pids.max" \
-    "# cd /" \
-    "############## End Setup Cgroups ##############" \
     "hostname jkrun" \
+    "sleep 0.2" \
 )
 
+# dynamically write commands to sourcefile
 for cmd in "${cmds[@]}"; do
     echo "$cmd" >> "${overlaydir}/${sourcefile}"
 done
 
+# if -n flag is set run virtual ethernet setup container-side
 if [[ "${dosetupnetwork}" == "true" ]]; then
-    setnetworkvars
-    netcmds=(\
-        "sleep 2"
-        "ip link set ${newconve} up" \
-        "ip addr add ${conveip}/24 dev ${newconve} &>/dev/null" \
-    )
+    if [[ "${isnewcontainer}" == "true" ]]; then
+        setnetworkvars
+        netcmds=(\
+            "ip link set ${newconve} up" \
+            "ip addr add ${conveip}/24 dev ${newconve} &>/dev/null" \
+        )
 
-    for netcmd in "${netcmds[@]}"; do
-        echo "$netcmd" >> "${overlaydir}/${netsourcefile}"
-    done
-    setupnetwork &
+        for netcmd in "${netcmds[@]}"; do
+            echo "$netcmd" >> "${overlaydir}/${netsourcefile}"
+        done
+        setupnetwork &
+    else
+        jkpremsg; printf "${warn}only one network setup per container allowed.\n"
+        jkpremsg; printf "${warn}network setup must be done on initial run of container (with -r flag).\n"
+    fi
 fi
 
-if [[ "${cmdtoexec}" =~ [Ss][Hh] ]]; then
-    setupcgroups &
-fi
+# run in background and wait for container pid on host
+setupcgroups &
 
+# containerize process with its own namespaces and change root filesystem
 unshare \
     --uts \
     --pid --fork \
@@ -426,4 +389,5 @@ unshare \
     --mount \
     --net \
     --cgroup \
-    chroot "${overlaydir}" /bin/sh -c './'"${sourcefile}"';./'"${netsourcefile}"';printf "\e[0m"; exec '"${cmdtoexec} ${cmdargs[@]}"
+    chroot "${overlaydir}" \
+    /bin/sh -c './'"${sourcefile}"';./'"${netsourcefile}"';printf "\e[0m"; exec '"${cmdtoexec} ${cmdargs[@]}"
